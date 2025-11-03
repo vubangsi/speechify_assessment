@@ -16,9 +16,15 @@ public class UserService {
     private static final String DB_FILE = "db.json";
     private final ObjectMapper objectMapper;
     private ClientRepository clientRepository;
+    private final LRUCache<List<User>> userListCache;
+    private final LRUCache<User> userCache;
 
-    public UserService() {
+
+    public UserService(ClientRepository clientRepository, LRUCache<List<User>> userListCache, LRUCache<User> userCache) {
         this.objectMapper = new ObjectMapper();
+        this.clientRepository = clientRepository;
+        this.userListCache = userListCache;
+        this.userCache = userCache;
     }
 
     public CompletableFuture<Boolean> addUser(
@@ -56,7 +62,7 @@ public class UserService {
                 }
 
                 // Get client
-                clientRepository = new ClientRepository();
+                //clientRepository = new ClientRepository();
                 Client client = clientRepository.getById(clientId).join();
                 if (client == null) {
                     System.err.println("Client not found");
@@ -86,6 +92,10 @@ public class UserService {
                 // Add user to database
                 users.add(objectMapper.valueToTree(user));
                 objectMapper.writeValue(dbFile, root);
+
+                userListCache.set("allUsers", null);
+                userCache.set(user.getId(), user);
+
                 return true;
             } catch (IOException e) {
                 return false;
@@ -114,6 +124,10 @@ public class UserService {
                     if (userNode.get("id").asText().equals(user.getId())) {
                         users.set(i, objectMapper.valueToTree(user));
                         objectMapper.writeValue(dbFile, root);
+
+                        userListCache.set("allUsers", null);
+                        userCache.set(user.getEmail(), user);
+
                         return true;
                     }
                 }
@@ -126,48 +140,69 @@ public class UserService {
 
     public CompletableFuture<List<User>> getAllUsers() {
         return CompletableFuture.supplyAsync(() -> {
-            try {
-                File dbFile = new File(DB_FILE);
-                if (!dbFile.exists()) {
-                    return new ArrayList<>();
-                }
+           List<User> cachedUsers = userListCache.get("allUsers");
+           if(cachedUsers != null){
+            return cachedUsers;
+           }
+           List<User> users = LoadAllUsersFromDb();
+           userListCache.set("allUsers", users);
+           return users;
+        });
+    }
 
-                ObjectNode root = (ObjectNode) objectMapper.readTree(dbFile);
-                ArrayNode users = (ArrayNode) root.get("users");
-                List<User> userList = new ArrayList<>();
-
-                for (int i = 0; i < users.size(); i++) {
-                    User user = objectMapper.treeToValue(users.get(i), User.class);
-                    userList.add(user);
-                }
-                return userList;
-            } catch (IOException e) {
+    private List<User> LoadAllUsersFromDb(){
+        try{
+            File dbFile = new File(DB_FILE);
+            if (!dbFile.exists()) {
                 return new ArrayList<>();
             }
-        });
+
+            ObjectNode root = (ObjectNode) objectMapper.readTree(dbFile);
+            ArrayNode users = (ArrayNode) root.get("users");
+            List<User> userList = new ArrayList<>();
+
+
+            for (int i = 0; i < users.size(); i++) {
+                User user = objectMapper.treeToValue(users.get(i), User.class);
+                userList.add(user);
+            }
+            return userList;
+        } catch (IOException e) {
+            return new ArrayList<>();
+        }
     }
 
     public CompletableFuture<User> getUserByEmail(String email) {
         return CompletableFuture.supplyAsync(() -> {
-            try {
-                File dbFile = new File(DB_FILE);
-                if (!dbFile.exists()) {
-                    return null;
-                }
+            User cachedUser = userCache.get(email);
+            if(cachedUser != null){
+                return cachedUser;
+            }
+            User user = LoadUserByEmail(email);
+            userCache.set(user.getId(), user);
+            return user;
+        });
+    }
 
-                ObjectNode root = (ObjectNode) objectMapper.readTree(dbFile);
-                ArrayNode users = (ArrayNode) root.get("users");
-
-                for (int i = 0; i < users.size(); i++) {
-                    ObjectNode userNode = (ObjectNode) users.get(i);
-                    if (userNode.get("email").asText().equals(email)) {
-                        return objectMapper.treeToValue(userNode, User.class);
-                    }
-                }
-                return null;
-            } catch (IOException e) {
+    private User LoadUserByEmail(String email) {
+        try{
+            File dbFile = new File(DB_FILE);
+            if (!dbFile.exists()) {
                 return null;
             }
-        });
+
+            ObjectNode root = (ObjectNode) objectMapper.readTree(dbFile);
+            ArrayNode users = (ArrayNode) root.get("users");
+
+            for (int i = 0; i < users.size(); i++) {
+                ObjectNode userNode = (ObjectNode) users.get(i);
+                if (userNode.get("email").asText().equals(email)) {
+                    return objectMapper.treeToValue(userNode, User.class);
+                }
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        }
     }
 } 
